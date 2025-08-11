@@ -439,7 +439,7 @@
     // Load estate data
     Promise.all([
       loadGeoJSON('Houses.geojson', 'house'),
-      loadGeoJSON('ROAD.geojson', 'road')
+      loadGeoJSON('ROAD.json', 'road')
     ]).then(() => {
       dataLoaded = true;
       document.getElementById('loadingSpinner').style.display = 'none';
