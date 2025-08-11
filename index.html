@@ -278,7 +278,7 @@
 <div id="mapPage" class="page">
   <button class="return-btn" onclick="show('home')">&larr; Back</button>
   <div class="search-bar">
-    <input type="text" id="searchInput" placeholder="Search house number"/>
+    <input type="text" id="searchInput" placeholder="Search house number or location in Ghana"/>
     <button onclick="doSearch()">Search</button>
     <div id="search-results"></div>
   </div>
@@ -443,8 +443,6 @@
     ]).then(() => {
       dataLoaded = true;
       document.getElementById('loadingSpinner').style.display = 'none';
-      // Debug: Log first house properties to verify structure
-      console.log("First house properties:", houseData[0]?.properties);
     }).catch(error => {
       console.error('Error loading data:', error);
       document.getElementById('loadingSpinner').style.display = 'none';
@@ -481,7 +479,7 @@
         if (type === 'house') {
           houseData = [{
             type: "Feature",
-            properties: { house_number: "A1", name: "Sample Building", type: "building" },
+            properties: { name: "Sample Building", type: "building", HOUSE_NUMB: "A1" },
             geometry: {
               type: "Point",
               coordinates: [0.0447, 5.7328]
@@ -710,7 +708,7 @@
     }
   }
 
-  // Setup search functionality - MODIFIED TO USE house_number
+  // Setup search functionality
   function setupSearch() {
     const searchInput = document.getElementById('searchInput');
     const searchResults = document.getElementById('search-results');
@@ -724,32 +722,28 @@
         return;
       }
       
-      // Search in house data using house_number
       const houseMatches = houseData.filter(house => 
-        house.properties && 
-        house.properties.house_number && 
-        String(house.properties.house_number).toUpperCase().includes(searchTerm)
-      ).slice(0, 5); // Limit to 5 results
+        house.properties.HOUSE_NUMB && 
+        house.properties.HOUSE_NUMB.toUpperCase().includes(searchTerm)
+      ).slice(0, 5);
       
       houseMatches.forEach(house => {
         const resultItem = document.createElement('div');
         resultItem.className = 'search-result';
-        
-        // Display house number and other relevant info
-        let displayText = `House: ${house.properties.house_number}`;
-        if (house.properties.name) displayText += ` | ${house.properties.name}`;
-        if (house.properties.type) displayText += ` | ${house.properties.type}`;
-        
-        resultItem.textContent = displayText;
+        resultItem.textContent = house.properties.HOUSE_NUMB;
         resultItem.addEventListener('click', () => {
           selectHouse(house);
           searchResults.style.display = 'none';
-          searchInput.value = house.properties.house_number;
+          searchInput.value = house.properties.HOUSE_NUMB;
         });
         searchResults.appendChild(resultItem);
       });
       
-      searchResults.style.display = houseMatches.length ? 'block' : 'none';
+      if (houseMatches.length > 0) {
+        searchResults.style.display = 'block';
+      } else {
+        searchResults.style.display = 'none';
+      }
     });
     
     document.addEventListener('click', (e) => {
@@ -759,32 +753,60 @@
     });
   }
 
-  // Perform search - MODIFIED TO USE house_number
+  // Perform search
   function doSearch() {
     const q = document.getElementById('searchInput').value.trim();
-    if (!q) {
-      speak("Please enter a house number.");
+    if (!q || !userPos.length) {
+      speak("Please enter a search term and ensure location services are enabled.");
       return;
     }
     
-    document.getElementById('loadingSpinner').style.display = 'block';
-    const searchTerm = q.toUpperCase();
-    
-    // Search in house data using house_number
+    // First check house numbers
     const houseMatch = houseData.find(house => 
-      house.properties && 
-      house.properties.house_number && 
-      String(house.properties.house_number).toUpperCase().includes(searchTerm)
+      house.properties.HOUSE_NUMB && 
+      house.properties.HOUSE_NUMB.toUpperCase() === q.toUpperCase()
     );
-    
-    document.getElementById('loadingSpinner').style.display = 'none';
     
     if (houseMatch) {
       selectHouse(houseMatch);
-    } else {
-      speak("No house found with number: " + q);
-      alert("No house found with number: " + q);
+      return;
     }
+    
+    // If not a house number, search OSM
+    document.getElementById('loadingSpinner').style.display = 'block';
+    
+    fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q + ' Ghana')}`)
+      .then(res => {
+        if (!res.ok) throw new Error('Search failed');
+        return res.json();
+      })
+      .then(data => {
+        document.getElementById('loadingSpinner').style.display = 'none';
+        if (!data.length) {
+          speak("Location not found. Please try another search term.");
+          return;
+        }
+        const dest = [parseFloat(data[0].lat), parseFloat(data[0].lon)];
+        
+        if (isInEstate(dest[0], dest[1])) {
+          const waypoints = getRoadWaypoints(userPos, dest);
+          routingControl.setWaypoints(waypoints);
+          map.setView(dest, 15);
+          speak(`Routing to ${q} via estate roads`);
+        } else {
+          routingControl.setWaypoints([
+            L.latLng(userPos[0], userPos[1]),
+            L.latLng(dest[0], dest[1])
+          ]);
+          map.setView(dest, 15);
+          speak(`Routing to ${q}`);
+        }
+      })
+      .catch(err => {
+        document.getElementById('loadingSpinner').style.display = 'none';
+        console.error('Search error:', err);
+        speak("Error searching for location. Please try again.");
+      });
   }
 
   // Check if location is within estate bounds
@@ -862,7 +884,7 @@
     return waypoints;
   }
 
-  // Select a house - MODIFIED TO USE house_number
+  // Select a house
   function selectHouse(house) {
     if (highlightedHouse) {
       map.removeLayer(highlightedHouse);
@@ -880,18 +902,9 @@
       shadowUrl: 'https://unpkg.com/leaflet@1.7.1/dist/images/marker-shadow.png',
       shadowSize: [41, 41]
     });
-    
-    // Create popup content with all available properties
-    let popupContent = `<b>House Number:</b> ${house.properties.house_number}`;
-    for (const prop in house.properties) {
-      if (prop !== 'house_number') {
-        popupContent += `<br><b>${prop}:</b> ${house.properties[prop]}`;
-      }
-    }
-    
     highlightedHouse = L.marker(houseLatLng, { icon: houseIcon })
       .addTo(map)
-      .bindPopup(popupContent)
+      .bindPopup(`<b>House:</b> ${house.properties.HOUSE_NUMB}`)
       .openPopup();
 
     if (userPos.length) {
@@ -917,7 +930,7 @@
         createMarker: function() { return null; }
       }).addTo(map);
       
-      speak(`Routing to house number ${house.properties.house_number}`);
+      speak(`Routing to house ${house.properties.HOUSE_NUMB} via estate roads`);
     } else {
       speak("Please enable location services to get directions.");
     }
